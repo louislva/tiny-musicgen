@@ -49,7 +49,7 @@ class LouisGen(nn.Module):
 
         # the zeros had a ?batch_sze+?? of 2 not 1 in meta's code, so need to look into what that was
         x, z = self.fuser(x, {
-            "description": (torch.zeros(1, 1, 1024).to(x.device), torch.zeros(1, 1).to(x.device)),
+            "description": (torch.zeros(2, 1, 1024).to(x.device), torch.zeros(2, 1).to(x.device)),
         })
         # z.shape = [B, 2, d_model]
         DEBUG and print("A2.x", x.shape)
@@ -82,7 +82,7 @@ def sample_louisgen(model):
     TEMPERATURE = 1.0
     louisgen = LouisGen(model.lm)
 
-    tokens = (torch.ones(1, 4, 1).long() * model.lm.special_token_id).cuda()
+    tokens = (torch.ones(2, 4, 1).long() * model.lm.special_token_id).cuda()
     with torch.no_grad():
         with torch.cuda.amp.autocast():
             for i in trange(250 + 3):
@@ -108,8 +108,12 @@ def sample_louisgen(model):
 
     return tokens
 
-tokens = sample_louisgen(model)
-# _, tokens = model.generate_unconditional(1, progress=True, return_tokens=True)
+for i in range(8):
+    tokens = sample_louisgen(model)
+    manual_audio = model.compression_model.decode(tokens)
+    audio_write('louis' + str(i), manual_audio[0].cpu(), sample_rate=32000)
 
-manual_audio = model.compression_model.decode(tokens)
-audio_write('manual_audio', manual_audio[0].cpu(), sample_rate=32000)
+for i in range(8):
+    _, tokens = model.generate_unconditional(1, progress=True, return_tokens=True)
+    manual_audio = model.compression_model.decode(tokens)
+    audio_write('zuckerberg' + str(i), manual_audio[0].cpu(), sample_rate=32000)
