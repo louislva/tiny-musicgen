@@ -8,10 +8,11 @@ from tqdm import trange
 import random
 import numpy as np
 
-# set seed to 42
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
+# set seed
+SEED = 2
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 
 DEBUG = False
 
@@ -34,13 +35,8 @@ class LouisGen(nn.Module):
         self.fuser = lm.fuser
         self.emb = nn.ModuleList([nn.Embedding(codebook_size + 1, d_model) for _ in range(codebook_count)])
         self.transformer = lm.transformer
-        self.out_norm = lm.out_norm
-        self.linears = nn.ModuleList([
-            lm.linears[0],
-            lm.linears[1],
-            lm.linears[2],
-            lm.linears[3],
-        ])
+        self.out_norm = nn.LayerNorm(d_model, eps=1e-5, elementwise_affine=True)
+        self.linears = nn.ModuleList([nn.Linear(d_model, codebook_size, bias=False) for _ in range(codebook_count)])
 
     def forward(self, x):
         # x.shape = [B, Q, T]
@@ -86,10 +82,13 @@ class LouisGen(nn.Module):
     def load_pretrained(self):
         path = '/home/louislva/.cache/huggingface/hub/models--facebook--musicgen-small/snapshots/2610ed09b7335026d4c2f977003a0dbc2c815272/state_dict.bin'
         values = torch.load(path, map_location='cuda')["best_state"]
-        self.emb[0].weight.data.copy_(values["emb.0.weight"])
-        self.emb[1].weight.data.copy_(values["emb.1.weight"])
-        self.emb[2].weight.data.copy_(values["emb.2.weight"])
-        self.emb[3].weight.data.copy_(values["emb.3.weight"])
+        for key in values:
+            if(key.startswith("linears")):
+                print(key, values[key].shape)
+        for i in range(self.codebook_count):
+            self.emb[i].weight.data.copy_(values[f"emb.{i}.weight"])
+            self.linears[i].weight.data.copy_(values[f"linears.{i}.weight"])
+        self.out_norm.weight.data.copy_(values["out_norm.weight"])
 
 louisgen = LouisGen(model.lm)
 louisgen = louisgen.cuda()
@@ -127,10 +126,10 @@ def sample_louisgen():
     return tokens
 
 if __name__ == '__main__':
-    # set seed to 42
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
+    # set seed to SEED
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
     tokens = sample_louisgen()
     manual_audio = model.compression_model.decode(tokens)
     audio_write('new', manual_audio[0].cpu(), sample_rate=32000)
