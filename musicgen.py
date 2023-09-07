@@ -5,20 +5,31 @@ from audiocraft.models import MusicGen
 from audiocraft.data.audio import audio_write
 from audiocraft.models.lm import LMModel
 from tqdm import trange
+import random
+import numpy as np
+
+# set seed to 42
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
 
 DEBUG = False
 
 model = MusicGen.get_pretrained('facebook/musicgen-small')
 model.set_generation_params(duration=5, top_k=2048)
-print(model.lm.transformer)
+# print(model.lm.transformer)
 
 class LouisGen(nn.Module):
     def __init__(self, lm: LMModel, codebook_count=4, codebook_size=2048, d_model=1024):
         super().__init__()
+
+        self.codebook_count = codebook_count
+        self.codebook_size = codebook_size
+        self.d_model = d_model
         
         # Copying layers over
-        self.cfg_dropout = lm.cfg_dropout
-        self.att_dropout = lm.att_dropout
+        # self.cfg_dropout = lm.cfg_dropout
+        # self.att_dropout = lm.att_dropout
         # self.condition_provider = lm.condition_provider
         self.fuser = lm.fuser
         self.emb = nn.ModuleList([nn.Embedding(codebook_size + 1, d_model) for _ in range(codebook_count)])
