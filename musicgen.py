@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 from audiocraft.models import MusicGen
 from audiocraft.data.audio import audio_write
 from audiocraft.models.lm import LMModel
@@ -77,19 +78,26 @@ class LouisGen(nn.Module):
         return x
 
 def sample_louisgen(model):
+    TOP_K = 250
+    TEMPERATURE = 1.0
     louisgen = LouisGen(model.lm)
 
     tokens = (torch.ones(1, 4, 1).long() * model.lm.special_token_id).cuda()
     with torch.no_grad():
         with torch.cuda.amp.autocast():
             for i in trange(250 + 3):
-                # x.shape = [B, Q, T]
-                DEBUG and print("input", tokens.shape)
-                x = louisgen.forward(tokens)
-                probs = (x).softmax(dim=-1)
-                new_tokens = probs[:, :, -1, :].view((-1, probs.shape[-1])).multinomial(num_samples=1).view((x.shape[0], x.shape[1], 1))
-                # x.shape = [B, Q, T]
-                tokens = torch.cat([tokens, new_tokens], dim=-1)
+                # Unsure if this is neccessary
+                tokens[:,0:,0:1] = model.lm.special_token_id
+                tokens[:,1:,0:2] = model.lm.special_token_id
+                tokens[:,2:,0:3] = model.lm.special_token_id
+                tokens[:,3:,0:4] = model.lm.special_token_id
+                
+                logits = louisgen.forward(tokens)
+                topk, indices = logits[:, :, -1, :].topk(TOP_K, dim=-1)
+                topk = F.softmax(topk, dim=-1)
+                samples = torch.multinomial(topk.view((-1, TOP_K)), 1).view(topk.shape[:-1] + (1,))
+                new_tokens = torch.gather(indices, dim=-1, index=samples)
+                tokens = torch.cat([tokens, new_tokens], dim=2)
 
     tokens = torch.stack([
         tokens[:,0,0:-3],
