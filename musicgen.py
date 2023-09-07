@@ -13,7 +13,7 @@ model.set_generation_params(duration=5, top_k=2048)
 print(model.lm.transformer)
 
 class LouisGen(nn.Module):
-    def __init__(self, lm: LMModel):
+    def __init__(self, lm: LMModel, codebook_count=4, codebook_size=2048, d_model=1024):
         super().__init__()
         
         # Copying layers over
@@ -21,12 +21,7 @@ class LouisGen(nn.Module):
         self.att_dropout = lm.att_dropout
         # self.condition_provider = lm.condition_provider
         self.fuser = lm.fuser
-        self.emb = nn.ModuleList([
-            lm.emb[0],
-            lm.emb[1],
-            lm.emb[2],
-            lm.emb[3],
-        ])
+        self.emb = nn.ModuleList([nn.Embedding(codebook_size + 1, d_model) for _ in range(codebook_count)])
         self.transformer = lm.transformer
         self.out_norm = lm.out_norm
         self.linears = nn.ModuleList([
@@ -76,25 +71,37 @@ class LouisGen(nn.Module):
         DEBUG and print("E", x.shape)
 
         return x
+    
+    def load_pretrained(self):
+        path = '/home/louislva/.cache/huggingface/hub/models--facebook--musicgen-small/snapshots/2610ed09b7335026d4c2f977003a0dbc2c815272/state_dict.bin'
+        values = torch.load(path, map_location='cuda')["best_state"]
+        self.emb[0].weight.data.copy_(values["emb.0.weight"])
+        self.emb[1].weight.data.copy_(values["emb.1.weight"])
+        self.emb[2].weight.data.copy_(values["emb.2.weight"])
+        self.emb[3].weight.data.copy_(values["emb.3.weight"])
 
-def sample_louisgen(model):
+louisgen = LouisGen(model.lm)
+louisgen = louisgen.cuda()
+louisgen.load_pretrained()
+
+def sample_louisgen():
     TOP_K = 250
     TEMPERATURE = 1.0
-    louisgen = LouisGen(model.lm)
-
+    
     tokens = (torch.ones(2, 4, 1).long() * model.lm.special_token_id).cuda()
     with torch.no_grad():
         with torch.cuda.amp.autocast():
             for i in trange(250 + 3):
-                # Unsure if this is neccessary
-                tokens[:,0:,0:1] = model.lm.special_token_id
-                tokens[:,1:,0:2] = model.lm.special_token_id
-                tokens[:,2:,0:3] = model.lm.special_token_id
-                tokens[:,3:,0:4] = model.lm.special_token_id
+                if(i <= 3):
+                    # Unsure if this is neccessary
+                    tokens[:,0:,0:1] = model.lm.special_token_id
+                    tokens[:,1:,0:2] = model.lm.special_token_id
+                    tokens[:,2:,0:3] = model.lm.special_token_id
+                    tokens[:,3:,0:4] = model.lm.special_token_id
                 
                 logits = louisgen.forward(tokens)
                 topk, indices = logits[:, :, -1, :].topk(TOP_K, dim=-1)
-                topk = F.softmax(topk, dim=-1)
+                topk = F.softmax((topk / TEMPERATURE), dim=-1)
                 samples = torch.multinomial(topk.view((-1, TOP_K)), 1).view(topk.shape[:-1] + (1,))
                 new_tokens = torch.gather(indices, dim=-1, index=samples)
                 tokens = torch.cat([tokens, new_tokens], dim=2)
@@ -108,12 +115,16 @@ def sample_louisgen(model):
 
     return tokens
 
-for i in range(8):
-    tokens = sample_louisgen(model)
+if __name__ == '__main__':
+    tokens = sample_louisgen()
     manual_audio = model.compression_model.decode(tokens)
-    audio_write('louis' + str(i), manual_audio[0].cpu(), sample_rate=32000)
+    audio_write('new', manual_audio[0].cpu(), sample_rate=32000)
+#     for i in range(8):
+#         tokens = sample_louisgen()
+#         manual_audio = model.compression_model.decode(tokens)
+#         audio_write('louis' + str(i), manual_audio[0].cpu(), sample_rate=32000)
 
-for i in range(8):
-    _, tokens = model.generate_unconditional(1, progress=True, return_tokens=True)
-    manual_audio = model.compression_model.decode(tokens)
-    audio_write('zuckerberg' + str(i), manual_audio[0].cpu(), sample_rate=32000)
+#     for i in range(8):
+#         _, tokens = model.generate_unconditional(1, progress=True, return_tokens=True)
+#         manual_audio = model.compression_model.decode(tokens)
+#         audio_write('zuckerberg' + str(i), manual_audio[0].cpu(), sample_rate=32000)
