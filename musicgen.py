@@ -127,6 +127,10 @@ def sample_louisgen():
     return tokens
 
 if __name__ == '__main__':
+    # set seed to 42
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
     tokens = sample_louisgen()
     manual_audio = model.compression_model.decode(tokens)
     audio_write('new', manual_audio[0].cpu(), sample_rate=32000)
