@@ -9,7 +9,7 @@ import random
 import numpy as np
 
 # set seed
-SEED = 2
+SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -89,6 +89,7 @@ class LouisGen(nn.Module):
             self.emb[i].weight.data.copy_(values[f"emb.{i}.weight"])
             self.linears[i].weight.data.copy_(values[f"linears.{i}.weight"])
         self.out_norm.weight.data.copy_(values["out_norm.weight"])
+        self.out_norm.bias.data.copy_(values["out_norm.bias"])
 
 louisgen = LouisGen(model.lm)
 louisgen = louisgen.cuda()
