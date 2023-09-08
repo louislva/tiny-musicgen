@@ -22,6 +22,17 @@ torch.manual_seed(SEED)
 model = MusicGen.get_pretrained('facebook/musicgen-small')
 model.set_generation_params(duration=5, top_k=2048)
 
+
+def create_sin_embedding(positions: torch.Tensor, dim: int) -> torch.Tensor:
+    # We aim for BTC format
+    assert dim % 2 == 0
+    half_dim = dim // 2
+    positions = positions
+    adim = torch.arange(half_dim, device=positions.device, dtype=positions.dtype).view(1, 1, -1)
+    max_period_tensor = torch.full([], 10000, device=positions.device)  # avoid sync point
+    phase = positions / (max_period_tensor ** (adim / (half_dim - 1)))
+    return torch.cat([torch.cos(phase), torch.sin(phase)], dim=-1)
+
 class TransformerLayer(nn.Module):
     def __init__(self):
         super().__init__()
@@ -69,8 +80,13 @@ class Transformer(nn.Module):
             TransformerLayer() for _ in range(depth)
         ])
 
+    def pos_embed(self, x):
+        B, T, dim = x.shape
+        positions = torch.arange(T, device=x.device).view(1, -1, 1).to(x.dtype).to(x.device)
+        x = x + create_sin_embedding(positions, dim)
+        return x
     def forward(self, x, cross_attention_src):
-        # x = self.pos_embed(x)
+        x = self.pos_embed(x)
         for layer in self.layers:
             x = layer(x, cross_attention_src=cross_attention_src)
         return x
