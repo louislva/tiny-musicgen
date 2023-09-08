@@ -1,9 +1,5 @@
 from tinygrad.tensor import Tensor
 from tinygrad import nn
-
-from einops import rearrange
-from xformers import ops
-
 import math
 
 def linear(x, w):
