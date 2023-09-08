@@ -53,7 +53,6 @@ class MultiheadAttention(StreamingModule):
         self.kv_repeat = kv_repeat
         if cross_attention:
             assert not causal, "Causal cannot work with cross attention."
-            assert rope is None, "Rope cannot work with cross attention."
 
         self.custom = custom
         if self.custom:

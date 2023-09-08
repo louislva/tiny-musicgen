@@ -2,26 +2,7 @@ import torch
 from torch import nn
 import typing as tp
 import torch.nn.functional as F
-from audiocraft.models import MusicGen
-from audiocraft.data.audio import audio_write
-from audiocraft.models.lm import LMModel
-from audiocraft.modules.transformer import StreamingTransformerLayer
-from tqdm import trange
-import random
-import numpy as np
-import copy
-from audiocraft.modules.streaming import StreamingModule
 from multiheadattention import MultiheadAttention
-
-# set seed
-SEED = 42
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-
-model = MusicGen.get_pretrained('facebook/musicgen-small')
-model.set_generation_params(duration=5, top_k=2048)
-
 
 def create_sin_embedding(positions: torch.Tensor, dim: int) -> torch.Tensor:
     # We aim for BTC format
@@ -91,27 +72,3 @@ class Transformer(nn.Module):
             x = layer(x, cross_attention_src=cross_attention_src)
         return x
     
-    def copy_weights(self):
-        reference = model.lm.transformer.layers
-        for i, layer in enumerate(self.layers):
-            # odict_keys(['self_attn.in_proj_weight', 'self_attn.out_proj.weight', 'linear1.weight', 'linear2.weight', 'norm1.weight', 'norm1.bias', 'norm2.weight', 'norm2.bias', 'cross_attention.in_proj_weight', 'cross_attention.out_proj.weight', 'norm_cross.weight', 'norm_cross.bias'])
-            layer_state_dict = layer.state_dict()
-            reference_state_dict = {}
-            reference_state_dict_full = reference[i].state_dict()
-            for k in reference_state_dict_full:
-                if k in layer_state_dict:
-                    # print("copying", k)
-                    reference_state_dict[k] = reference_state_dict_full[k]
-            # print("reference_state_dict", reference_state_dict)
-            self.layers[i].load_state_dict(reference_state_dict)
-    
-their_transformer = model.lm.transformer.float()
-my_transformer = Transformer().cuda().float()
-my_transformer.copy_weights()
-sample = torch.randn(1, 4, 1024).cuda()
-
-with torch.no_grad():
-    their_out = their_transformer(sample, cross_attention_src=sample)
-    my_out = my_transformer(sample, cross_attention_src=sample)
-    diff = (their_out.half() - my_out.half()).abs().sum()
-    print("diff", diff)
