@@ -3,6 +3,7 @@ from tinygrad import nn
 from tinygrad.nn.state import load_state_dict, get_state_dict
 from tinygrad.helpers import dtypes
 from transformer import Transformer
+from huggingface_hub import hf_hub_download
 import torch
 
 class MusicGen():
@@ -26,7 +27,8 @@ class MusicGen():
         x = Tensor.stack([linear(x) for linear in self.linears], dim=1)
         return x
     
-    def load_pretrained(self, path: str):
+    def load_pretrained(self, model='facebook/musicgen-small'):
+        path = hf_hub_download(repo_id=model, filename='state_dict.bin', cache_dir=None)
         _state_dict = torch.load(path, map_location='cpu')
         self_state_dict = get_state_dict(self)
         state_dict = {
