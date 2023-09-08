@@ -24,6 +24,21 @@ class SimpleAttention(nn.Module):
         
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
     
+
+    def _get_mask(self, current_steps: int, device: torch.device, dtype: torch.dtype):
+        # Return a causal mask, accounting for potentially stored past keys/values
+        # We actually return a bias for the attention score, as this has the same
+        # convention both in the builtin MHA in Pytorch, and Xformers functions.
+        queries_pos = torch.arange(
+            0, current_steps, device=device).view(-1, 1)
+        keys_pos = torch.arange(current_steps, device=device).view(1, -1)
+        delta = queries_pos - keys_pos
+        valid = delta >= 0
+        return torch.where(
+            valid,
+            torch.zeros([], device=device, dtype=dtype),
+            torch.full([], float('-inf'), device=device, dtype=dtype))
+
     def forward(self, query, key, value):
         if self.cross_attention:
             # Project
@@ -33,26 +48,26 @@ class SimpleAttention(nn.Module):
 
             # Split into heads
             q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
+        else:
+            projected = nn.functional.linear(query, self.in_proj_weight)
+            bound_layout = "b h p t d"
+            packed = rearrange(projected, f"b t (p h d) -> {bound_layout}", p=3, h=self.num_heads)
+            q, k, v = ops.unbind(packed, dim=2)
 
-            # q.shape = [B, h, T, d]
-            # Logic: every head is effectively another batch item; e.g. you should only interact with your own head index; 
-            # that's why it goes first together with batch
-
-
-
-            # print("q", q.shape)
-            attention = q.matmul(k.transpose(2, 3)) / math.sqrt(self.embed_dim)
-            # print("attention", attention.shape)
-            activation = F.softmax(attention, dim=-1)
-            # print("activation", activation.shape)
-            x = v * activation
-            # print("xva", x.shape)
-            x = x.transpose(1, 2)
-            x = x.reshape(x.shape[0], x.shape[1], self.embed_dim)
-
-        
+        # q.shape = [B, h, T, d]
+        # Logic: every head is effectively another batch item; e.g. you should only interact with your own head index; 
+        # that's why it goes first together with batch
+        q = q / math.sqrt(self.embed_dim // self.num_heads)
+        attention = q.matmul(k.transpose(2, 3)) 
+        if self.causal:
+            attention += self._get_mask(query.shape[1], q.device, q.dtype).unsqueeze(0).unsqueeze(0)
+        activation = torch.softmax(attention, dim=-1)
+        layout = "b h t d"
+        key_layout = layout.replace('t', 'k')
+        x = torch.einsum(f"b h t k, {key_layout} -> {layout}", activation, v)
+        x = rearrange(x, f"{layout} -> b t (h d)", h=self.num_heads)        
         x = self.out_proj(x)
-        return x
+        return x, None
 
 
 class MultiheadAttention(StreamingModule):
@@ -169,10 +184,7 @@ class MultiheadAttention(StreamingModule):
                                "use the causal args in the constructor.")
 
         time_dim = _get_attention_time_dimension()
-        if time_dim == 2:
-            layout = "b h t d"
-        else:
-            layout = "b t h d"
+        layout = "b h t d"
         dtype = query.dtype
         if self._is_streaming:
             assert self.causal or self.cross_attention, \
@@ -187,34 +199,22 @@ class MultiheadAttention(StreamingModule):
         # custom implementation
         assert need_weights is False
         assert key_padding_mask is None
-        if self.cross_attention:
+        if False:
             # Different queries, keys, values, we have to spit manually the weights
             # before applying the linear.
             dim = self.in_proj_weight.shape[0] // 3
-            if self.in_proj_bias is None:
-                bias_q, bias_k, bias_v = None, None, None
-            else:
-                bias_q = self.in_proj_bias[:dim]
-                bias_k = self.in_proj_bias[dim: 2 * dim]
-                bias_v = self.in_proj_bias[2 * dim:]
-            q = nn.functional.linear(query, self.in_proj_weight[:dim], bias_q)
+            q = nn.functional.linear(query, self.in_proj_weight[:dim])
             # todo: when streaming, we could actually save k, v and check the shape actually match.
-            k = nn.functional.linear(key, self.in_proj_weight[dim: 2 * dim], bias_k)
-            v = nn.functional.linear(value, self.in_proj_weight[2 * dim:], bias_v)
+            k = nn.functional.linear(query, self.in_proj_weight[dim: 2 * dim])
+            v = nn.functional.linear(query, self.in_proj_weight[2 * dim:])
             q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
         else:
-            # profiling breaks that propertysomehow.
-            assert query is key, "specialized implementation"
-            assert value is key, "specialized implementation"
-            projected = nn.functional.linear(query, self.in_proj_weight, self.in_proj_bias)
-            if time_dim == 2:
-                bound_layout = "b h p t d"
-            else:
-                bound_layout = "b t p h d"
+            projected = nn.functional.linear(query, self.in_proj_weight)
+            bound_layout = "b h p t d"
             packed = rearrange(projected, f"b t (p h d) -> {bound_layout}", p=3, h=self.num_heads)
             q, k, v = ops.unbind(packed, dim=2)
 
-            k, v = self._complete_kv(k, v)
+            # k, v = self._complete_kv(k, v)
      
         # We include the dot product as float32, for consistency
         # with the other implementations that include that step
@@ -223,20 +223,16 @@ class MultiheadAttention(StreamingModule):
         # would be done as bfloat16, so `attention_as_float32` will
         # extend a bit the range of operations done in float32,
         # although this should make no difference.
-        q = q / q.shape[-1] ** 0.5
+        q = q / math.sqrt(self.embed_dim // self.num_heads)
         key_layout = layout.replace('t', 'k')
         query_layout = layout
-        if self._is_streaming and self.safe_streaming and q.device.type == 'cuda':
-            with torch.autocast(device_type=q.device.type, dtype=torch.float32):
-                pre_w = torch.einsum(f"{query_layout},{key_layout}-> b h t k", q, k)
-        else:
-            pre_w = torch.einsum(f"{query_layout},{key_layout}-> b h t k", q, k)
-        if attn_mask is not None:
-            pre_w = pre_w + attn_mask
+        pre_w = q.matmul(k.transpose(2, 3)) 
+        pre_w = pre_w + self._get_mask(query.shape[1], q.device, q.dtype).unsqueeze(0).unsqueeze(0)
         w = torch.softmax(pre_w, dim=-1)
         # Key and value have the same format.
+
         x = torch.einsum(f"b h t k, {key_layout} -> {layout}", w, v)
-        x = x.to(dtype)
+        # x = x.to(dtype)
         x = rearrange(x, f"{layout} -> b t (h d)", h=self.num_heads)
         # print("x.shape", x.shape)
         x = self.out_proj(x)
