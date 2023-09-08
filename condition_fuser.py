@@ -8,6 +8,8 @@ import torch.nn.functional as F
 from audiocraft.modules.streaming import StreamingModule
 from transformer import create_sin_embedding
 
+# This file is cursed. Didn't bother cleaning it up.
+
 ConditionType = tp.Tuple[torch.Tensor, torch.Tensor]  # condition, mask
 
 class ConditionFuser(StreamingModule):

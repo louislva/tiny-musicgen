@@ -1,10 +1,62 @@
 import torch
 from torch import nn
-import typing as tp
 import torch.nn.functional as F
-from multiheadattention import MultiheadAttention, SimpleAttention
 
-USE_CUSTOM_ATTENTION = True
+from einops import rearrange
+from xformers import ops
+
+import math
+
+class MultiheadAttention(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, causal: bool, cross_attention: bool):
+        super().__init__()
+
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.causal = causal
+        self.cross_attention = cross_attention
+
+        self.in_proj_weight = nn.Parameter(torch.empty((embed_dim * 3, embed_dim)))
+        nn.init.kaiming_uniform_(self.in_proj_weight, a=math.sqrt(5))
+        
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+    
+
+    def get_causal_mask(self, size: int):
+        queries_pos = torch.arange(size).view(-1, 1)
+        keys_pos = torch.arange(size).view(1, -1)
+        return torch.where(
+            (queries_pos - keys_pos) >= 0,
+            torch.zeros([]),
+            torch.full([], float('-inf'))
+        )
+
+    def forward(self, query, key, value):
+        if self.cross_attention:
+            q = F.linear(query, self.in_proj_weight[:self.embed_dim])
+            k = F.linear(key, self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
+            v = F.linear(value, self.in_proj_weight[2 * self.embed_dim:])
+            q, k, v = [rearrange(x, f"b t (h d) -> b h t d", h=self.num_heads) for x in [q, k, v]]
+        else:
+            projected = F.linear(query, self.in_proj_weight)
+            bound_layout = "b h p t d"
+            packed = rearrange(projected, f"b t (p h d) -> {bound_layout}", p=3, h=self.num_heads)
+            q, k, v = ops.unbind(packed, dim=2)
+
+        B, h, T, d = q.shape
+        # Logic: every head is effectively another batch item,
+        # e.g. you should only interact with your own head index,
+        # that's why it goes first together with batch
+        q = q / math.sqrt(self.embed_dim // self.num_heads)
+        attention = q.matmul(k.transpose(2, 3)) 
+        if self.causal:
+            attn_mask = self.get_causal_mask(query.shape[1]).unsqueeze(0).unsqueeze(0).to(q.device).to(q.dtype)
+            attention += attn_mask
+        activation = torch.softmax(attention, dim=-1)
+        x = (v.unsqueeze(2).repeat([1,1,T,1,1]) * activation.unsqueeze(-1).repeat([1,1,1,1,64])).sum(dim=3)
+        x = x.transpose(1,2).reshape(B, T, self.embed_dim)
+        x = self.out_proj(x)
+        return x, None
 
 def create_sin_embedding(positions: torch.Tensor, dim: int) -> torch.Tensor:
     # We aim for BTC format
@@ -27,7 +79,7 @@ class TransformerLayer(nn.Module):
             num_heads=16,
         )
         self.norm_cross = nn.LayerNorm(1024)
-        self.cross_attention = SimpleAttention(
+        self.cross_attention = MultiheadAttention(
             embed_dim=1024,
             causal=False,
             cross_attention=True,
