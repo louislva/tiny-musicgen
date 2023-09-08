@@ -3,11 +3,11 @@ from torch import nn
 import torch.nn.functional as F
 from audiocraft.models import MusicGen
 from audiocraft.data.audio import audio_write
-from audiocraft.models.lm import LMModel
 from tqdm import trange
 import random
 import numpy as np
 from transformer import Transformer
+from condition_fuser import ConditionFuser
 
 DEBUG = False
 
@@ -19,7 +19,7 @@ torch.manual_seed(SEED)
 
 # The model
 class LouisGen(nn.Module):
-    def __init__(self, lm: LMModel, depth=24, codebook_count=4, codebook_size=2048, dim=1024):
+    def __init__(self, depth=24, codebook_count=4, codebook_size=2048, dim=1024):
         super().__init__()
 
         self.codebook_count = codebook_count
@@ -28,10 +28,12 @@ class LouisGen(nn.Module):
         self.depth = depth
         
         # Copying layers over
-        # self.cfg_dropout = lm.cfg_dropout
-        # self.att_dropout = lm.att_dropout
         # self.condition_provider = lm.condition_provider
-        self.fuser = lm.fuser
+        self.fuser = ConditionFuser(
+            fuse2cond={'sum': [], 'cross': ['description'], 'prepend': [], 'input_interpolate': []},
+            cross_attention_pos_emb=False,
+            cross_attention_pos_emb_scale=1
+        )
         self.emb = nn.ModuleList([nn.Embedding(codebook_size + 1, dim) for _ in range(codebook_count)])
         self.transformer = Transformer(dim=dim, depth=24)
         self.out_norm = nn.LayerNorm(dim)
@@ -79,27 +81,16 @@ class LouisGen(nn.Module):
 
         return x
     
-    def load_pretrained(self):
-        with torch.no_grad():
-            path = '/home/louislva/.cache/huggingface/hub/models--facebook--musicgen-small/snapshots/2610ed09b7335026d4c2f977003a0dbc2c815272/state_dict.bin'
-            _values = torch.load(path, map_location='cuda')
-            values = _values["best_state"]
-            for i in range(self.codebook_count):
-                self.emb[i].weight.data.copy_(values[f"emb.{i}.weight"])
-                self.linears[i].weight.data.copy_(values[f"linears.{i}.weight"])
-            self.out_norm.weight.data.copy_(values["out_norm.weight"])
-            self.out_norm.bias.data.copy_(values["out_norm.bias"])
-
-            transformer_dict = {}
-            for key in values:
-                if(key.startswith("transformer")):
-                    transformer_dict[key.replace("transformer.", "")] = values[key]
-            self.transformer.load_state_dict(transformer_dict)
-
-model = MusicGen.get_pretrained('facebook/musicgen-small')            
-louisgen = LouisGen(model.lm)
+def load_pretrained(model: LouisGen, path: str):
+    _values = torch.load(path, map_location='cuda')
+    state_dict = {
+        k: v for k, v in _values["best_state"].items() if k in model.state_dict()
+    }
+    model.load_state_dict(state_dict)
+          
+louisgen = LouisGen()
 louisgen = louisgen.cuda()
-louisgen.load_pretrained()
+load_pretrained(louisgen, '/home/louislva/.cache/huggingface/hub/models--facebook--musicgen-small/snapshots/2610ed09b7335026d4c2f977003a0dbc2c815272/state_dict.bin')
 
 def sample_louisgen():
     TOP_K = 250
@@ -139,6 +130,9 @@ if __name__ == '__main__':
     np.random.seed(SEED)
     torch.manual_seed(SEED)
     tokens = sample_louisgen()
+
+    # Still need compression model from fb
+    model = MusicGen.get_pretrained('facebook/musicgen-small')  
     manual_audio = model.compression_model.decode(tokens)
     audio_write('new', manual_audio[0].cpu(), sample_rate=32000)
 #     for i in range(8):
