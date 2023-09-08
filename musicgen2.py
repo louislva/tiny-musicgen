@@ -35,10 +35,23 @@ class TransformerLayer(nn.Module):
             bias=False,
             custom=True
         )
+        self.norm_cross = nn.LayerNorm(1024)
+        self.cross_attention = MultiheadAttention(
+            embed_dim=1024,
+            causal=False,
+            cross_attention=True,
+            num_heads=16,
+            dropout=0.0,
+            bias=False,
+            custom=True
+        )
 
     def forward(self, x, cross_attention_src):
         x_ = self.norm1(x)
         x = x + self.self_attn(x_, x_, x_)[0]
+
+        x_ = self.norm_cross(x)
+        x = x + self.cross_attention(x_, cross_attention_src, cross_attention_src)[0]
         return x
 
 class Transformer(nn.Module):
