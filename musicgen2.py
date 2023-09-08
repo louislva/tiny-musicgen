@@ -46,12 +46,19 @@ class TransformerLayer(nn.Module):
             custom=True
         )
 
+        self.norm2 = nn.LayerNorm(1024)
+        self.linear1 = nn.Linear(1024, 4096, bias=False)
+        self.linear2 = nn.Linear(4096, 1024, bias=False)
+
     def forward(self, x, cross_attention_src):
         x_ = self.norm1(x)
         x = x + self.self_attn(x_, x_, x_)[0]
 
         x_ = self.norm_cross(x)
         x = x + self.cross_attention(x_, cross_attention_src, cross_attention_src)[0]
+
+        x_ = self.norm2(x)
+        x = x + self.linear2(F.gelu(self.linear1(x_)))
         return x
 
 class Transformer(nn.Module):
