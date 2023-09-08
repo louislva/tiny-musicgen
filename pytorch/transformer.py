@@ -2,9 +2,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from einops import rearrange
-from xformers import ops
-
 import math
 
 class MultiheadAttention(nn.Module):
@@ -36,12 +33,11 @@ class MultiheadAttention(nn.Module):
             q = F.linear(query, self.in_proj_weight[:self.embed_dim])
             k = F.linear(key, self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
             v = F.linear(value, self.in_proj_weight[2 * self.embed_dim:])
-            q, k, v = [rearrange(x, f"b t (h d) -> b h t d", h=self.num_heads) for x in [q, k, v]]
+            q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
         else:
             projected = F.linear(query, self.in_proj_weight)
-            bound_layout = "b h p t d"
-            packed = rearrange(projected, f"b t (p h d) -> {bound_layout}", p=3, h=self.num_heads)
-            q, k, v = ops.unbind(packed, dim=2)
+            packed = projected.reshape(projected.shape[0], projected.shape[1], 3, self.num_heads, self.embed_dim // self.num_heads).transpose(1, 3)
+            q, k, v = packed.unbind(dim=2)
 
         B, h, T, d = q.shape
         # Logic: every head is effectively another batch item,
