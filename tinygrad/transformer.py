@@ -114,10 +114,3 @@ class Transformer():
         for layer in self.layers:
             x = layer(x, cross_attention_src=cross_attention_src)
         return x
-    
-if __name__ == "__main__":
-    print("hello")
-    tran = Transformer()
-    x = Tensor.ones([1, 4, 1024]).to("cuda")
-    y = tran(x, x)
-    print(y.realize())

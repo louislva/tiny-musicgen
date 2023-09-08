@@ -35,16 +35,3 @@ class MusicGen():
             k: Tensor(v.cpu().detach().numpy()) for k, v in _state_dict["best_state"].items() if k in self_state_dict
         }
         load_state_dict(self, state_dict)
-
-if __name__ == "__main__":
-    print("hello")
-    musicgen = MusicGen()
-    x = Tensor.zeros([1, 4, 5], dtype=dtypes.int32).to("cuda")
-    y = musicgen(x).realize()
-    print(y)
-    x = Tensor.zeros([1, 4, 5], dtype=dtypes.int32).to("cuda")
-    y = musicgen(x).realize()
-    print(y)
-    x = Tensor.zeros([1, 4, 5], dtype=dtypes.int32).to("cuda")
-    y = musicgen(x).realize()
-    print(y)

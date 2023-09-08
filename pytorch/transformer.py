@@ -115,4 +115,3 @@ class Transformer(nn.Module):
         for layer in self.layers:
             x = layer(x, cross_attention_src=cross_attention_src)
         return x
-    
