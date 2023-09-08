@@ -9,7 +9,7 @@ import numpy as np
 from musicgen import MusicGen
 
 # set seed
-SEED = 42
+SEED = 43
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
