@@ -27,7 +27,6 @@ class LouisGen(nn.Module):
         self.dim = dim
         self.depth = depth
         
-        # Copying layers over
         # self.condition_provider = lm.condition_provider
         self.fuser = ConditionFuser(
             fuse2cond={'sum': [], 'cross': ['description'], 'prepend': [], 'input_interpolate': []},

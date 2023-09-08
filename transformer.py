@@ -2,7 +2,9 @@ import torch
 from torch import nn
 import typing as tp
 import torch.nn.functional as F
-from multiheadattention import MultiheadAttention
+from multiheadattention import MultiheadAttention, SimpleAttention
+
+USE_CUSTOM_ATTENTION = True
 
 def create_sin_embedding(positions: torch.Tensor, dim: int) -> torch.Tensor:
     # We aim for BTC format
@@ -23,19 +25,13 @@ class TransformerLayer(nn.Module):
             causal=True, # big difference!
             cross_attention=False,
             num_heads=16,
-            dropout=0.0,
-            bias=False,
-            custom=True
         )
         self.norm_cross = nn.LayerNorm(1024)
-        self.cross_attention = MultiheadAttention(
+        self.cross_attention = SimpleAttention(
             embed_dim=1024,
             causal=False,
             cross_attention=True,
             num_heads=16,
-            dropout=0.0,
-            bias=False,
-            custom=True
         )
 
         self.norm2 = nn.LayerNorm(1024)
