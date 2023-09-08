@@ -1,5 +1,4 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
 from audiocraft.models import EncodecModel
 from audiocraft.data.audio import audio_write
@@ -16,7 +15,7 @@ torch.manual_seed(SEED)
 
 musicgen = MusicGen()
 musicgen = musicgen.cuda()
-musicgen.load_pretrained('/home/louislva/.cache/huggingface/hub/models--facebook--musicgen-small/snapshots/2610ed09b7335026d4c2f977003a0dbc2c815272/state_dict.bin')
+musicgen.load_pretrained()
 
 def sample_musicgen():
     TOP_K = 250
