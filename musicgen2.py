@@ -1,3 +1,5 @@
+from einops import rearrange
+from xformers import ops
 import torch
 from torch import nn
 import typing as tp
@@ -21,6 +23,8 @@ torch.manual_seed(SEED)
 model = MusicGen.get_pretrained('facebook/musicgen-small')
 model.set_generation_params(duration=5, top_k=2048)
 
+def _get_attention_time_dimension():
+    return 2
 class MultiheadAttention(StreamingModule):
     """Similar to `nn.MultiheadAttention` but with support for streaming, causal evaluation.
 
@@ -47,8 +51,7 @@ class MultiheadAttention(StreamingModule):
         dtype (torch.dtype, optional): dtype to use.
     """
     def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True,
-                 causal: bool = False, past_context: tp.Optional[int] = None, custom: bool = False,
-                 memory_efficient: bool = False, attention_as_float32: bool = False, cross_attention: bool = False,
+                 causal: bool = False, past_context: tp.Optional[int] = None, custom: bool = False, attention_as_float32: bool = False, cross_attention: bool = False,
                  safe_streaming: bool = True, qk_layer_norm: bool = False, kv_repeat: int = 1,
                  device=None, dtype=None):
         super().__init__()
@@ -59,7 +62,6 @@ class MultiheadAttention(StreamingModule):
         self.embed_dim = embed_dim
         self.causal = causal
         self.past_context = past_context
-        self.memory_efficient = memory_efficient
         self.attention_as_float32 = attention_as_float32
         self.cross_attention = cross_attention
         self.safe_streaming = safe_streaming
@@ -70,10 +72,7 @@ class MultiheadAttention(StreamingModule):
             assert not causal, "Causal cannot work with cross attention."
             assert rope is None, "Rope cannot work with cross attention."
 
-        if memory_efficient:
-            _verify_xformers_memory_efficient_compat()
-
-        self.custom = _is_custom(custom, memory_efficient)
+        self.custom = custom
         if self.custom:
             out_dim = embed_dim
             assert num_heads % kv_repeat == 0
@@ -119,16 +118,6 @@ class MultiheadAttention(StreamingModule):
         # We actually return a bias for the attention score, as this has the same
         # convention both in the builtin MHA in Pytorch, and Xformers functions.
         time_dim = _get_attention_time_dimension()
-        if self.memory_efficient:
-            from xformers.ops import LowerTriangularMask
-            if current_steps == 1:
-                # If we only have one step, then we do not need a mask.
-                return None
-            elif 'past_keys' in self._streaming_state:
-                raise RuntimeError("Not supported at the moment")
-            else:
-                # Then we can safely use a lower triangular mask
-                return LowerTriangularMask()
         if self._streaming_state:
             past_keys = self._streaming_state['past_keys']
             past_steps = past_keys.shape[time_dim]
@@ -227,10 +216,9 @@ class MultiheadAttention(StreamingModule):
                     k = self.k_layer_norm(k)
                 q, k, v = [rearrange(x, f"b t (h d) -> {layout}", h=self.num_heads) for x in [q, k, v]]
             else:
-                if not _is_profiled():
-                    # profiling breaks that propertysomehow.
-                    assert query is key, "specialized implementation"
-                    assert value is key, "specialized implementation"
+                # profiling breaks that propertysomehow.
+                assert query is key, "specialized implementation"
+                assert value is key, "specialized implementation"
                 projected = nn.functional.linear(query, self.in_proj_weight, self.in_proj_bias)
                 if self.kv_repeat == 1:
                     if time_dim == 2:
@@ -264,13 +252,6 @@ class MultiheadAttention(StreamingModule):
                     v = expand_repeated_kv(v, self.kv_repeat)
             if self.attention_as_float32:
                 q, k, v = [x.float() for x in [q, k, v]]
-            if self.memory_efficient:
-                p = self.dropout if self.training else 0
-                if _efficient_attention_backend == 'torch':
-                    x = torch.nn.functional.scaled_dot_product_attention(
-                        q, k, v, is_causal=attn_mask is not None, dropout_p=p)
-                else:
-                    x = ops.memory_efficient_attention(q, k, v, attn_mask, p=p)
             else:
                 # We include the dot product as float32, for consistency
                 # with the other implementations that include that step
@@ -321,7 +302,7 @@ class TransformerLayer(nn.Module):
             embed_dim=1024,
             causal=True, # big difference!
             # past_context=None,
-            memory_efficient=True, # negligble difference, but a difference
+            # memory_efficient=True, # negligble difference, but a difference
             # attention_as_float32=False,
             # rope=None,
             cross_attention=False,
