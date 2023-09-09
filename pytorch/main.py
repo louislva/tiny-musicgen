@@ -30,14 +30,7 @@ def sample_musicgen():
     tokens = (torch.ones(2, 4, 1).long() * SPECIAL_TOKEN_ID).to(DEVICE)
     with torch.no_grad():
         with torch.cuda.amp.autocast():
-            for i in trange(10 + 3):
-                if(i <= 3):
-                    # Unsure if this is neccessary
-                    tokens[:,0:,0:1] = SPECIAL_TOKEN_ID
-                    tokens[:,1:,0:2] = SPECIAL_TOKEN_ID
-                    tokens[:,2:,0:3] = SPECIAL_TOKEN_ID
-                    tokens[:,3:,0:4] = SPECIAL_TOKEN_ID
-                
+            for i in trange(10 + 3):                
                 logits = musicgen.forward(tokens)
                 topk, indices = logits[:, :, -1, :].topk(TOP_K, dim=-1)
                 topk = F.softmax((topk / TEMPERATURE), dim=-1)
@@ -61,6 +54,6 @@ if __name__ == '__main__':
     torch.manual_seed(SEED)
     tokens = sample_musicgen()
 
-    # Still need compression model from fb
+    # Convert from tokens to audio
     manual_audio = encodec.decode(tokens)
-    torchaudio.save('new-ta.wav', manual_audio[0].cpu(), 32000)
+    torchaudio.save('new.wav', manual_audio[0].cpu(), 32000)
