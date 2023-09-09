@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
 from typing import Tuple
 
@@ -18,14 +19,14 @@ class EncodecConv1d(nn.Module):
     def _pad1d(x: torch.Tensor, paddings: Tuple[int, int], mode: str = "zero", value: float = 0.0):
         length = x.shape[-1]
         if not mode == "reflect":
-            return nn.functional.pad(x, paddings, mode, value)
+            return F.pad(x, paddings, mode, value)
 
         max_pad = max(paddings[0], paddings[1])
         extra_pad = 0
         if length <= max_pad:
             extra_pad = max_pad - length + 1
-            x = nn.functional.pad(x, (0, extra_pad))
-        padded = nn.functional.pad(x, paddings, mode, value)
+            x = F.pad(x, (0, extra_pad))
+        padded = F.pad(x, paddings, mode, value)
         end = padded.shape[-1] - extra_pad
         return padded[..., :end]
 
@@ -112,21 +113,60 @@ class EncodecDecoder(nn.Module):
             x = layer(x)
         return x
 
+class EncodecEuclideanCodebook(nn.Module):
+    def __init__(self, codebook_size=2048, codebook_dim=128):
+        super().__init__()
+        self.embed = nn.Parameter(torch.zeros(codebook_size, codebook_dim))
+
+    def decode(self, tokens):
+        return F.embedding(tokens, self.embed)
+
+class EncodecVectorQuantization(nn.Module):
+    def __init__(self, codebook_size=2048, codebook_dim=128):
+        super().__init__()
+        self.codebook = EncodecEuclideanCodebook(
+            codebook_size=codebook_size, codebook_dim=codebook_dim
+        )
+
+    def encode(self, x):
+        x = x.permute(0, 2, 1)
+        embed_in = self.codebook.encode(x)
+        return embed_in
+
+    def decode(self, tokens):
+        x = self.codebook.decode(tokens)
+        x = x.permute(0, 2, 1)
+        return x
+    
+class EncodecQuantizer(nn.Module):
+    def __init__(self, codebook_size=2048, frame_rate=50, num_quantizers=4):
+        super().__init__()
+        self.codebook_size = codebook_size
+        self.frame_rate = frame_rate
+        self.num_quantizers = num_quantizers
+        self.layers = nn.ModuleList([
+            EncodecVectorQuantization(
+                codebook_size=codebook_size, codebook_dim=128
+            ) for _ in range(num_quantizers)
+        ])
+
+    def decode(self, q: torch.Tensor) -> torch.Tensor:
+        x = torch.tensor(0.0, device=q.device)
+        for codebook, tokens in zip(self.layers, q):
+            vector = codebook.decode(tokens)
+            x = x + vector
+        return x
+
 class Encodec(nn.Module):
     def __init__(self):
         super().__init__()
-
         self.decoder = EncodecDecoder()
-
-    def decode(self, q):
-        return self.decoder(q)
+        self.quantizer = EncodecQuantizer()
     
-    def forward(self, x):
-        # TODO:
-        # x = self.encode(x)
-        # x = self.quantize(x)
-        # x = self.unquantize(x)
-        x = self.decoder(x)
+    def decode(self, q):
+        q = q.transpose(0, 1)
+        x = self.quantizer.decode(q)
+        return self.decoder(x)
     
     def load_pretrained(self, device, model='facebook/encodec_32khz'):
         path = hf_hub_download(repo_id=model, filename='pytorch_model.bin', cache_dir=None)

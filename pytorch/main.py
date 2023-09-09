@@ -1,11 +1,13 @@
 import torch
 import torch.nn.functional as F
-from audiocraft.models import EncodecModel
-from audiocraft.data.audio import audio_write
 from tqdm import trange
 import random
 import numpy as np
 from musicgen import MusicGen
+from compression import Encodec
+import torchaudio
+
+DEVICE = 'cpu'
 
 # set seed
 SEED = 43
@@ -14,18 +16,21 @@ np.random.seed(SEED)
 torch.manual_seed(SEED)
 
 musicgen = MusicGen()
-musicgen = musicgen.cuda()
-musicgen.load_pretrained()
+musicgen = musicgen.to(DEVICE)
+musicgen.load_pretrained(DEVICE)
+encodec = Encodec()
+encodec = encodec.to(DEVICE)
+encodec.load_pretrained(DEVICE)
 
 def sample_musicgen():
     TOP_K = 250
     TEMPERATURE = 1.0
     SPECIAL_TOKEN_ID = 2048
     
-    tokens = (torch.ones(2, 4, 1).long() * SPECIAL_TOKEN_ID).cuda()
+    tokens = (torch.ones(2, 4, 1).long() * SPECIAL_TOKEN_ID).to(DEVICE)
     with torch.no_grad():
         with torch.cuda.amp.autocast():
-            for i in trange(75 + 3):
+            for i in trange(10 + 3):
                 if(i <= 3):
                     # Unsure if this is neccessary
                     tokens[:,0:,0:1] = SPECIAL_TOKEN_ID
@@ -57,15 +62,5 @@ if __name__ == '__main__':
     tokens = sample_musicgen()
 
     # Still need compression model from fb
-    encodec = EncodecModel.get_pretrained('facebook/encodec_32khz').cuda()
     manual_audio = encodec.decode(tokens)
-    audio_write('new', manual_audio[0].cpu(), sample_rate=32000)
-#     for i in range(8):
-#         tokens = sample_musicgen()
-#         manual_audio = model.compression_model.decode(tokens)
-#         audio_write('louis' + str(i), manual_audio[0].cpu(), sample_rate=32000)
-
-#     for i in range(8):
-#         _, tokens = model.generate_unconditional(1, progress=True, return_tokens=True)
-#         manual_audio = model.compression_model.decode(tokens)
-#         audio_write('zuckerberg' + str(i), manual_audio[0].cpu(), sample_rate=32000)
+    torchaudio.save('new-ta.wav', manual_audio[0].cpu(), 32000)

@@ -24,9 +24,9 @@ class MusicGen(nn.Module):
         x = torch.stack([linear(x) for linear in self.linears], dim=1)
         return x
     
-    def load_pretrained(self, model='facebook/musicgen-small'):
+    def load_pretrained(self, device, model='facebook/musicgen-small'):
         path = hf_hub_download(repo_id=model, filename='state_dict.bin', cache_dir=None)
-        _values = torch.load(path, map_location='cuda')
+        _values = torch.load(path, map_location=device)
         state_dict = {
             k: v for k, v in _values["best_state"].items() if k in self.state_dict()
         }
