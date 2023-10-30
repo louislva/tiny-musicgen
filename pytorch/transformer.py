@@ -12,6 +12,7 @@ class MultiheadAttention(nn.Module):
         self.num_heads = num_heads
         self.causal = causal
         self.cross_attention = cross_attention
+        self.decoder = True
 
         self.in_proj_weight = nn.Parameter(torch.empty((embed_dim * 3, embed_dim)))
         nn.init.kaiming_uniform_(self.in_proj_weight, a=math.sqrt(5))
@@ -61,6 +62,10 @@ class MultiheadAttention(nn.Module):
             value = query
         
         q = F.linear(query, self.in_proj_weight[:self.embed_dim])
+        if self.decoder:
+            q = F.linear(query[:, -1:], self.in_proj_weight[:self.embed_dim])
+        else:
+            q = F.linear(query, self.in_proj_weight[:self.embed_dim])
         k = self.compute_key(key)
         v = self.compute_value(value)
         q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
@@ -70,9 +75,9 @@ class MultiheadAttention(nn.Module):
         # e.g. you should only interact with your own head index,
         # that's why it goes first together with batch
         q = q / math.sqrt(self.embed_dim // self.num_heads)
-        attention = q.matmul(k.transpose(2, 3)) 
+        attention = q.matmul(k.transpose(2, 3))
         if self.causal:
-            attn_mask = self.get_causal_mask(query.shape[1]).unsqueeze(0).unsqueeze(0).to(q.device).to(q.dtype)
+            attn_mask = self.get_causal_mask(q.shape[2]).unsqueeze(0).unsqueeze(0).to(q.device).to(q.dtype)
             attention += attn_mask
         activation = torch.softmax(attention, dim=-1)
         x = (v.unsqueeze(2).repeat([1,1,T,1,1]) * activation.unsqueeze(-1).repeat([1,1,1,1,64])).sum(dim=3)
