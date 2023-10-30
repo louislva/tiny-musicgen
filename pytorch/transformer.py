@@ -19,8 +19,8 @@ class MultiheadAttention(nn.Module):
         
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
-        self.key_cache = torch.empty((0, 0, embed_dim))
-        self.value_cache = torch.empty((0, 0, embed_dim))
+        self.key_cache = None
+        self.value_cache = None
 
     def get_causal_mask(self, size: int):
         queries_pos = torch.arange(size).view(-1, 1)
@@ -33,8 +33,8 @@ class MultiheadAttention(nn.Module):
     
     def compute_key(self, key):
         # If batch size changed, or the seq length has gone down, invalidate the cache
-        if self.key_cache.shape[0] != key.shape[0] or key.shape[1] < self.key_cache.shape[1] or self.disable_cache:
-            self.key_cache = torch.empty((key.shape[0], 0, key.shape[-1]))
+        if self.key_cache is None or self.key_cache.shape[0] != key.shape[0] or key.shape[1] < self.key_cache.shape[1]:
+            self.key_cache = torch.empty((key.shape[0], 0, key.shape[-1]), dtype=torch.float16).to(key.device)
 
         key_computed = F.linear(key[:, self.key_cache.shape[1]:], self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
         self.key_cache = torch.cat([
@@ -45,8 +45,8 @@ class MultiheadAttention(nn.Module):
         return self.key_cache
     def compute_value(self, value):
         # If batch size changed, or the seq length has gone down, invalidate the cache
-        if self.value_cache.shape[0] != value.shape[0] or value.shape[1] < self.value_cache.shape[1] or self.disable_cache:
-            self.value_cache = torch.empty((value.shape[0], 0, value.shape[-1]))
+        if self.value_cache is None or self.value_cache.shape[0] != value.shape[0] or value.shape[1] < self.value_cache.shape[1]:
+            self.value_cache = torch.empty((value.shape[0], 0, value.shape[-1]), dtype=torch.float16).to(value.device)
 
         value_computed = F.linear(value[:, self.value_cache.shape[1]:], self.in_proj_weight[2 * self.embed_dim:])
         self.value_cache = torch.cat([
