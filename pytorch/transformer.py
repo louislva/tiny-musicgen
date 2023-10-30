@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+import xformers.ops as xops
 
 import math
 
@@ -12,12 +13,15 @@ class MultiheadAttention(nn.Module):
         self.num_heads = num_heads
         self.causal = causal
         self.cross_attention = cross_attention
+        self.decoder = True
 
         self.in_proj_weight = nn.Parameter(torch.empty((embed_dim * 3, embed_dim)))
         nn.init.kaiming_uniform_(self.in_proj_weight, a=math.sqrt(5))
         
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-    
+
+        self.key_cache = None
+        self.value_cache = None
 
     def get_causal_mask(self, size: int):
         queries_pos = torch.arange(size).view(-1, 1)
@@ -27,30 +31,49 @@ class MultiheadAttention(nn.Module):
             torch.zeros([]),
             torch.full([], float('-inf'))
         )
+    
+    def compute_key(self, key):
+        # If batch size changed, or the seq length has gone down, invalidate the cache
+        if self.key_cache is None or self.key_cache.shape[0] != key.shape[0] or key.shape[1] < self.key_cache.shape[1]:
+            self.key_cache = torch.empty((key.shape[0], 0, key.shape[-1]), dtype=torch.float16).to(key.device)
 
+        key_computed = F.linear(key[:, self.key_cache.shape[1]:], self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
+        self.key_cache = torch.cat([
+            self.key_cache,
+            key_computed
+        ], dim=1)
+
+        return self.key_cache
+    def compute_value(self, value):
+        # If batch size changed, or the seq length has gone down, invalidate the cache
+        if self.value_cache is None or self.value_cache.shape[0] != value.shape[0] or value.shape[1] < self.value_cache.shape[1]:
+            self.value_cache = torch.empty((value.shape[0], 0, value.shape[-1]), dtype=torch.float16).to(value.device)
+
+        value_computed = F.linear(value[:, self.value_cache.shape[1]:], self.in_proj_weight[2 * self.embed_dim:])
+        self.value_cache = torch.cat([
+            self.value_cache,
+            value_computed
+        ], dim=1)
+
+        return self.value_cache
+    
     def forward(self, query, key, value):
-        if self.cross_attention:
-            q = F.linear(query, self.in_proj_weight[:self.embed_dim])
-            k = F.linear(key, self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
-            v = F.linear(value, self.in_proj_weight[2 * self.embed_dim:])
-            q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
+        if not self.cross_attention:
+            key = query
+            value = query
+        
+        q = F.linear(query, self.in_proj_weight[:self.embed_dim])
+        if self.decoder:
+            q = F.linear(query[:, -1:], self.in_proj_weight[:self.embed_dim])
         else:
-            projected = F.linear(query, self.in_proj_weight)
-            packed = projected.reshape(projected.shape[0], projected.shape[1], 3, self.num_heads, self.embed_dim // self.num_heads).transpose(1, 3)
-            q, k, v = packed.unbind(dim=2)
+            q = F.linear(query, self.in_proj_weight[:self.embed_dim])
+        k = self.compute_key(key)
+        v = self.compute_value(value)
+        q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads) for x in [q, k, v]]
 
-        B, h, T, d = q.shape
-        # Logic: every head is effectively another batch item,
-        # e.g. you should only interact with your own head index,
-        # that's why it goes first together with batch
-        q = q / math.sqrt(self.embed_dim // self.num_heads)
-        attention = q.matmul(k.transpose(2, 3)) 
-        if self.causal:
-            attn_mask = self.get_causal_mask(query.shape[1]).unsqueeze(0).unsqueeze(0).to(q.device).to(q.dtype)
-            attention += attn_mask
-        activation = torch.softmax(attention, dim=-1)
-        x = (v.unsqueeze(2).repeat([1,1,T,1,1]) * activation.unsqueeze(-1).repeat([1,1,1,1,64])).sum(dim=3)
-        x = x.transpose(1,2).reshape(B, T, self.embed_dim)
+        B, T, h, d = q.shape
+        x = xops.memory_efficient_attention(q, k, v)
+        x = x.view(B, T, self.embed_dim)
         x = self.out_proj(x)
         return x, None
 
