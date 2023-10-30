@@ -7,7 +7,7 @@ from musicgen import MusicGen
 from compression import Encodec
 import torchaudio
 
-DEVICE = 'cpu'
+DEVICE = 'cuda'
 
 # set seed
 SEED = 43
@@ -22,7 +22,7 @@ encodec = Encodec()
 encodec = encodec.to(DEVICE)
 encodec.load_pretrained(DEVICE)
 
-def sample_musicgen():
+def sample_musicgen(seconds=0.2):
     TOP_K = 250
     TEMPERATURE = 1.0
     SPECIAL_TOKEN_ID = 2048
@@ -30,7 +30,7 @@ def sample_musicgen():
     tokens = (torch.ones(2, 4, 1).long() * SPECIAL_TOKEN_ID).to(DEVICE)
     with torch.no_grad():
         with torch.cuda.amp.autocast():
-            for i in trange(10 + 3):                
+            for i in trange(int(50 * seconds) + 3):                
                 logits = musicgen.forward(tokens)
                 topk, indices = logits[:, :, -1, :].topk(TOP_K, dim=-1)
                 topk = F.softmax((topk / TEMPERATURE), dim=-1)
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     random.seed(SEED)
     np.random.seed(SEED)
     torch.manual_seed(SEED)
-    tokens = sample_musicgen()
+    tokens = sample_musicgen(10)
 
     # Convert from tokens to audio
     manual_audio = encodec.decode(tokens)
