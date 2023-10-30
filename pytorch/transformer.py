@@ -29,15 +29,14 @@ class MultiheadAttention(nn.Module):
         )
 
     def forward(self, query, key, value):
-        if self.cross_attention:
-            q = F.linear(query, self.in_proj_weight[:self.embed_dim])
-            k = F.linear(key, self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
-            v = F.linear(value, self.in_proj_weight[2 * self.embed_dim:])
-            q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
-        else:
-            projected = F.linear(query, self.in_proj_weight)
-            packed = projected.reshape(projected.shape[0], projected.shape[1], 3, self.num_heads, self.embed_dim // self.num_heads).transpose(1, 3)
-            q, k, v = packed.unbind(dim=2)
+        if not self.cross_attention:
+            key = query
+            value = query
+        
+        q = F.linear(query, self.in_proj_weight[:self.embed_dim])
+        k = F.linear(key, self.in_proj_weight[self.embed_dim: 2 * self.embed_dim])
+        v = F.linear(value, self.in_proj_weight[2 * self.embed_dim:])
+        q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads).transpose(1, 2) for x in [q, k, v]]
 
         B, h, T, d = q.shape
         # Logic: every head is effectively another batch item,
