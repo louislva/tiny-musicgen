@@ -22,15 +22,6 @@ class MultiheadAttention(nn.Module):
 
         self.key_cache = None
         self.value_cache = None
-
-    def get_causal_mask(self, size: int):
-        queries_pos = torch.arange(size).view(-1, 1)
-        keys_pos = torch.arange(size).view(1, -1)
-        return torch.where(
-            (queries_pos - keys_pos) >= 0,
-            torch.zeros([]),
-            torch.full([], float('-inf'))
-        )
     
     def compute_key(self, key):
         # If batch size changed, or the seq length has gone down, invalidate the cache
@@ -72,10 +63,40 @@ class MultiheadAttention(nn.Module):
         q, k, v = [x.reshape(x.shape[0], x.shape[1], self.num_heads, x.shape[2] // self.num_heads) for x in [q, k, v]]
 
         B, T, h, d = q.shape
-        x = xops.memory_efficient_attention(q, k, v)
+        if(q.device != "cuda"):
+            x = inefficient_attention(q, k, v)
+        else:
+            x = xops.memory_efficient_attention(q, k, v)
         x = x.view(B, T, self.embed_dim)
         x = self.out_proj(x)
         return x, None
+
+def get_causal_mask(size: int):
+    queries_pos = torch.arange(size).view(-1, 1)
+    keys_pos = torch.arange(size).view(1, -1)
+    return torch.where(
+        (queries_pos - keys_pos) >= 0,
+        torch.zeros([]),
+        torch.full([], float('-inf'))
+    )
+
+def inefficient_attention(q, k, v, causal=True):
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+
+    B, h, T, d = q.shape
+    embed_dim = d * h
+    
+    q = q / math.sqrt(embed_dim // h)
+    attention = q.matmul(k.transpose(2, 3))
+    if causal:
+        attn_mask = get_causal_mask(q.shape[2]).unsqueeze(0).unsqueeze(0).to(q.device).to(q.dtype)
+        attention += attn_mask
+    activation = torch.softmax(attention, dim=-1)
+    x = (v.unsqueeze(2).repeat([1,1,T,1,1]) * activation.unsqueeze(-1).repeat([1,1,1,1,64])).sum(dim=3)
+    x = x.transpose(1, 2).reshape(B, T, d * h)
+    return x
 
 def create_sin_embedding(positions: torch.Tensor, dim: int) -> torch.Tensor:
     # We aim for BTC format

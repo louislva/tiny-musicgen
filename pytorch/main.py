@@ -10,10 +10,9 @@ import torchaudio
 DEVICE = 'cuda'
 
 # set seed
-SEED = 43
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
+random.seed(1)
+np.random.seed(1)
+torch.manual_seed(1)
 
 musicgen = MusicGen()
 musicgen = musicgen.to(DEVICE)
@@ -48,12 +47,13 @@ def sample_musicgen(seconds=0.2):
     return tokens
 
 if __name__ == '__main__':
-    # set seed to SEED
-    random.seed(SEED)
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
-    tokens = sample_musicgen(10)
+    for seed in range(1, 100):
+        # set seed to SEED
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        tokens = sample_musicgen(10)
 
-    # Convert from tokens to audio
-    manual_audio = encodec.decode(tokens)
-    torchaudio.save('new.wav', manual_audio[0].cpu(), 32000)
+        # Convert from tokens to audio
+        manual_audio = encodec.decode(tokens)
+        torchaudio.save('sample' + str(seed) + '.mp3', manual_audio[0].cpu(), 32000)
